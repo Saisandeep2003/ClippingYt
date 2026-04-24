@@ -1,11 +1,15 @@
 __pycache__/
 *.py[cod]
 .venv/
+backend/clipEnv/
 .mypy_cache/
 .pytest_cache/
 build/
 dist/
 *.egg-info/
+frontend/node_modules/
+frontend/build/
+frontend/.cache/
 
 config/sources.toml
 client_secret*.json
@@ -14,4 +18,9 @@ token*.json
 data/state/*.db
 data/state/*.json
 data/exports/*.mp4
+data/exports/*.log
+data/exports/*.render.ps1
+data/exports/*.plan.json
 data/exports/*_build/
+data/assets/approved/
+data/assets/compiled/
