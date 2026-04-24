@@ -10,8 +10,8 @@ The current codebase is split into:
 ## Current Workflow
 
 1. Open the discovery screen in the frontend.
-2. Search using tags such as `funny`, `animal`, or `fails`.
-3. Let the backend discover relevant subreddits, fetch posts, score candidates, and filter unsafe or already-used items.
+2. Select one or more topic markers such as `animal`, `kids`, `fails`, or `interesting`.
+3. Let the backend fetch video posts from the JSON-mapped subreddits, sort them shortest-to-longest, and hide clips that were already used.
 4. Select exactly 5 compilation-ready clips.
 5. Move to the compilation screen, optionally remove clips, and render the final video.
 6. Download the rendered output and mark the source clips as used so they do not show up again.
@@ -51,14 +51,15 @@ Key routes:
 
 - `GET /` - API status landing page
 - `GET /api/health` - health/version check
-- `POST /api/reddit/discover` - discover and rank Reddit clips from tags or supplied subreddits
+- `GET /api/reddit/topics` - list the topic-marker catalog and mapped subreddits
+- `POST /api/reddit/discover` - discover and rank Reddit clips from selected topic markers
 - `GET /api/reddit/clips/{external_id}/playback` - cached playback proxy for a discovered Reddit clip
 - `POST /api/compilation/render` - render a countdown compilation video with FFmpeg
 - `POST /api/compilation/mark-used` - record clips as consumed after download
 
 Core backend modules:
 
-- `services/reddit_discovery_service.py`: subreddit discovery, Reddit fetches, ranking, duplicate avoidance, playback caching
+- `services/reddit_discovery_service.py`: topic catalog loading, Reddit fetches, ranking, duplicate avoidance, and playback caching
 - `services/copyright_service.py`: audio and metadata heuristics for copyright risk assessment
 - `services/compilation_service.py`: FFmpeg-based clip normalization, overlay generation, outro handling, and final concat
 - `schemas.py`: request/response models and validation rules
@@ -107,7 +108,7 @@ The frontend is a React app in `frontend/` built with `react-scripts`.
 Main screens:
 
 - `DashboardPage`: workflow overview and entry points
-- `RedditDiscoveryPage`: tag input, subreddit discovery, paginated results, clip selection
+- `RedditDiscoveryPage`: topic selection, paginated results, per-topic filtering, and clip selection
 - `CompilationPage`: selected lineup review, render trigger, rendered-video preview and download
 
 Frontend API integration is defined in `frontend/src/services/api.js` and points to:
@@ -151,13 +152,13 @@ The renderer currently:
 
 ## Testing
 
-Current automated coverage is focused on the Reddit discovery service.
+Current automated coverage includes Reddit discovery helpers plus API route checks for health,
+topic listing, discovery, used-clip marking, and compilation rendering.
 
 Run backend tests with:
 
 ```bash
-cd backend
-python -m unittest discover -s tests
+./.venv/bin/python -m unittest discover -s backend/tests
 ```
 
 ## Current Status
