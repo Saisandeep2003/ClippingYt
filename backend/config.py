@@ -13,7 +13,39 @@ EXPORT_DIR = DATA_DIR / "exports"
 EXPORT_EXTRAS_DIR = EXPORT_DIR / "Extras"
 APPROVED_ASSETS_DIR = DATA_DIR / "assets" / "approved"
 COMPILED_ASSETS_DIR = DATA_DIR / "assets" / "compiled"
+REDDIT_TOPIC_MARKERS_PATH = DATA_DIR / "reddit_topic_markers.json"
 DEFAULT_OUTRO_PATH = EXPORT_EXTRAS_DIR / "Outro.mp4"
+
+
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        normalized_key = key.strip()
+        if not normalized_key or normalized_key in os.environ:
+            continue
+
+        normalized_value = value.strip()
+        if len(normalized_value) >= 2 and normalized_value[0] == normalized_value[-1] and normalized_value[0] in {'"', "'"}:
+            normalized_value = normalized_value[1:-1]
+
+        os.environ[normalized_key] = normalized_value
+
+
+def load_local_env() -> None:
+    _load_env_file(ROOT_DIR / ".env")
+    _load_env_file(BACKEND_DIR / ".env")
 
 
 def _build_database_url() -> str:
@@ -50,6 +82,7 @@ class Settings:
     )
 
 
+load_local_env()
 settings = Settings()
 
 

@@ -3,11 +3,20 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse
 
-from schemas import RedditDiscoveryRequest, RedditDiscoveryResponse
-from services.reddit_discovery_service import discover_safe_reddit_clips, get_reddit_clip_playback_response
+from schemas import RedditDiscoveryRequest, RedditDiscoveryResponse, RedditTopicCatalogResponse
+from services.reddit_discovery_service import (
+    discover_safe_reddit_clips,
+    get_reddit_clip_playback_response,
+    list_reddit_topic_markers,
+)
 
 
 router = APIRouter(prefix="/reddit", tags=["reddit"])
+
+
+@router.get("/topics", response_model=RedditTopicCatalogResponse)
+def get_reddit_topic_markers() -> RedditTopicCatalogResponse:
+    return list_reddit_topic_markers()
 
 
 @router.post("/discover", response_model=RedditDiscoveryResponse)

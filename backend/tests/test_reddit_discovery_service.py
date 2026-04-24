@@ -19,9 +19,13 @@ from services.reddit_discovery_service import (  # noqa: E402
     _external_media_type,
     _filter_used_clips,
     _normalize_post,
+    _parse_json_response_body,
+    _resolve_topic_marker_subreddits,
     _score_clip_tag_relevance,
+    list_reddit_topic_markers,
     mark_reddit_clips_as_used,
 )
+from fastapi import HTTPException  # noqa: E402
 
 
 class RedditDiscoveryServiceTests(unittest.TestCase):
@@ -62,7 +66,7 @@ class RedditDiscoveryServiceTests(unittest.TestCase):
         self.assertEqual(_external_media_type("https://streamable.com/abcd12"), ("external_video", "image", False))
 
     def test_normalize_post_keeps_audio_ready_reddit_video(self) -> None:
-        payload = RedditDiscoveryRequest(tags=["funny cat"])
+        payload = RedditDiscoveryRequest(topic_markers=["animal"])
         post = {
             "id": "abc123",
             "title": "Funny cat clip",
@@ -99,6 +103,7 @@ class RedditDiscoveryServiceTests(unittest.TestCase):
         self.assertIsNotNone(clip)
         self.assertEqual(clip["media_type"], "reddit_video")
         self.assertTrue(clip["compilation_ready"])
+        self.assertEqual(clip["preview_url"], "/api/reddit/clips/abc123/playback")
 
     def test_used_clips_are_filtered_only_after_marking(self) -> None:
         clips = [
@@ -118,6 +123,41 @@ class RedditDiscoveryServiceTests(unittest.TestCase):
         self.assertEqual(marked_count, 1)
         self.assertEqual([clip["external_id"] for clip in remaining], ["def456"])
         self.assertEqual(filtered_count, 1)
+
+    def test_discovery_request_uses_topic_markers_only(self) -> None:
+        payload = RedditDiscoveryRequest(topic_markers=["animal", "fails"])
+
+        self.assertEqual(payload.topic_markers, ["animal", "fails"])
+
+    def test_topic_marker_catalog_and_resolution_use_json_file(self) -> None:
+        topic_payload = """
+        {
+          "animal": ["r/animalsdoingstuff", "AnimalsBeingBros"],
+          "fails": ["Whatcouldgowrong", "nonononoyes"]
+        }
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            topic_path = Path(tmp_dir) / "reddit_topic_markers.json"
+            topic_path.write_text(topic_payload, encoding="utf-8")
+
+            with patch("services.reddit_discovery_service.REDDIT_TOPIC_MARKERS_PATH", topic_path):
+                catalog = list_reddit_topic_markers()
+                markers, subreddits = _resolve_topic_marker_subreddits(["animal", "fails"])
+
+        self.assertEqual([item.key for item in catalog.items], ["animal", "fails"])
+        self.assertEqual(catalog.items[0].subreddits, ["animalsdoingstuff", "AnimalsBeingBros"])
+        self.assertEqual(markers, ["animal", "fails"])
+        self.assertEqual(subreddits, ["animalsdoingstuff", "AnimalsBeingBros", "Whatcouldgowrong", "nonononoyes"])
+
+    def test_html_block_page_returns_clean_discovery_error(self) -> None:
+        html_payload = "<!doctype html><html><head><title>Ow! -- reddit.com</title></head></html>"
+
+        with self.assertRaises(HTTPException) as context:
+            _parse_json_response_body(html_payload, source_mode="public")
+
+        self.assertEqual(context.exception.status_code, 502)
+        self.assertIn("blocked the public discovery request", str(context.exception.detail).lower())
 
 
 if __name__ == "__main__":

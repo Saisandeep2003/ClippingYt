@@ -95,6 +95,9 @@ Optional environment variables:
 - `REDDIT_USER_AGENT`: overrides the default Reddit user agent string
 - `FRONTEND_ORIGINS`: comma-separated CORS origins for the React app
 
+The backend now loads `.env` files from either the repo root or `backend/.env` automatically.
+You can start from `backend/.env.example`.
+
 If Reddit credentials are not set, discovery falls back to public Reddit access where possible.
 
 ## Frontend Overview

@@ -11,6 +11,11 @@ export function getApiRoot() {
   return apiClient.defaults.baseURL.replace(/\/api\/?$/, "");
 }
 
+export async function listRedditTopicMarkers() {
+  const response = await apiClient.get("/reddit/topics");
+  return response.data;
+}
+
 export async function discoverRedditClips(payload) {
   const response = await apiClient.post("/reddit/discover", payload);
   return response.data;

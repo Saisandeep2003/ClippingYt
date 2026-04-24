@@ -395,6 +395,75 @@ textarea:focus {
   width: auto;
 }
 
+.topic-marker-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.topic-marker-heading {
+  display: grid;
+  gap: 0.3rem;
+}
+
+.topic-marker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.topic-marker-chip {
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(18, 33, 31, 0.12);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--text);
+  text-align: left;
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.topic-marker-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 142, 125, 0.28);
+}
+
+.topic-marker-chip.active {
+  border-color: rgba(15, 142, 125, 0.42);
+  box-shadow: 0 10px 24px rgba(15, 142, 125, 0.14);
+  background: rgba(227, 248, 243, 0.96);
+}
+
+.topic-marker-chip small {
+  color: var(--muted);
+}
+
+.topic-filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.topic-filter-chip {
+  padding: 0.72rem 1rem;
+  border: 1px solid rgba(18, 33, 31, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--text);
+  transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.topic-filter-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 142, 125, 0.28);
+}
+
+.topic-filter-chip.active {
+  border-color: rgba(15, 142, 125, 0.42);
+  box-shadow: 0 10px 24px rgba(15, 142, 125, 0.14);
+  background: rgba(227, 248, 243, 0.96);
+}
+
 .link-row a {
   text-decoration: none;
   color: var(--accent-strong);

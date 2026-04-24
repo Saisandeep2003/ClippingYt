@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import EmptyState from "../components/EmptyState";
 import LoadingState from "../components/LoadingState";
 import { getApiRoot, markCompilationClipsUsed, renderCompilation } from "../services/api";
+import { appendUsedClipIds } from "../utils/usedClips";
 
 const STORAGE_KEY = "clipping-automation:selected-clips";
 
@@ -158,6 +159,7 @@ function CompilationPage() {
 
       if (externalIds.length) {
         await markCompilationClipsUsed({ external_ids: externalIds });
+        appendUsedClipIds(externalIds);
       }
 
       setDownloadMessage("Downloaded successfully. These source clips are now marked as used.");

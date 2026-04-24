@@ -21,8 +21,14 @@ import certifi
 from fastapi import HTTPException, status
 from fastapi.responses import FileResponse
 
-from config import APPROVED_ASSETS_DIR, STATE_DIR, settings
-from schemas import RankingWeights, RedditClipRead, RedditDiscoveryRequest, RedditDiscoveryResponse
+from config import APPROVED_ASSETS_DIR, REDDIT_TOPIC_MARKERS_PATH, STATE_DIR, settings
+from schemas import (
+    RedditClipRead,
+    RedditDiscoveryRequest,
+    RedditDiscoveryResponse,
+    RedditTopicCatalogResponse,
+    RedditTopicMarkerRead,
+)
 
 
 PUBLIC_REDDIT_BASE_URL = "https://www.reddit.com"
@@ -108,6 +114,116 @@ class ApiContext:
     base_url: str
     headers: dict[str, str]
     source_mode: str
+
+
+def _normalize_subreddit_name(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.strip()
+    if normalized.lower().startswith("r/"):
+        normalized = normalized[2:].strip()
+    return normalized
+
+
+def _topic_marker_label(marker: str) -> str:
+    parts = [part for part in marker.replace("-", "_").split("_") if part]
+    return " ".join(part.capitalize() for part in parts) or marker
+
+
+def _read_topic_marker_map() -> dict[str, list[str]]:
+    if not REDDIT_TOPIC_MARKERS_PATH.exists():
+        return {}
+
+    try:
+        payload = json.loads(REDDIT_TOPIC_MARKERS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    catalog: dict[str, list[str]] = {}
+
+    for raw_key, raw_subreddits in payload.items():
+        if not isinstance(raw_key, str) or not isinstance(raw_subreddits, list):
+            continue
+
+        key = raw_key.strip().lower().replace(" ", "_")
+        if not key:
+            continue
+
+        cleaned_subreddits: list[str] = []
+        seen: set[str] = set()
+        for raw_subreddit in raw_subreddits:
+            if not isinstance(raw_subreddit, str):
+                continue
+            subreddit = _normalize_subreddit_name(raw_subreddit)
+            if not subreddit:
+                continue
+            lowered = subreddit.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            cleaned_subreddits.append(subreddit)
+
+        if cleaned_subreddits:
+            catalog[key] = cleaned_subreddits
+
+    return catalog
+
+
+def list_reddit_topic_markers() -> RedditTopicCatalogResponse:
+    catalog = _read_topic_marker_map()
+    return RedditTopicCatalogResponse(
+        items=[
+            RedditTopicMarkerRead(
+                key=marker,
+                label=_topic_marker_label(marker),
+                subreddits=subreddits,
+            )
+            for marker, subreddits in catalog.items()
+        ]
+    )
+
+
+def _resolve_topic_marker_subreddits(topic_markers: list[str]) -> tuple[list[str], list[str]]:
+    catalog = _read_topic_marker_map()
+    if not topic_markers or not catalog:
+        return [], []
+
+    resolved_markers: list[str] = []
+    subreddits: list[str] = []
+    seen_subreddits: set[str] = set()
+
+    for topic_marker in topic_markers:
+        normalized_marker = topic_marker.strip().lower().replace(" ", "_")
+        if not normalized_marker:
+            continue
+        marker_subreddits = catalog.get(normalized_marker)
+        if not marker_subreddits:
+            continue
+        resolved_markers.append(normalized_marker)
+        for subreddit in marker_subreddits:
+            lowered = subreddit.lower()
+            if lowered in seen_subreddits:
+                continue
+            seen_subreddits.add(lowered)
+            subreddits.append(subreddit)
+
+    return resolved_markers, subreddits
+
+
+def _topic_markers_for_subreddit(subreddit: str) -> list[str]:
+    normalized_subreddit = _normalize_subreddit_name(subreddit).lower()
+    if not normalized_subreddit:
+        return []
+
+    matches: list[str] = []
+    for marker, subreddits in _read_topic_marker_map().items():
+        if any(_normalize_subreddit_name(candidate).lower() == normalized_subreddit for candidate in subreddits):
+            matches.append(marker)
+
+    return matches
 
 
 def _utc_now() -> datetime:
@@ -311,6 +427,15 @@ def _parse_reddit_error_detail(detail: str, status_code: int) -> str:
     if not cleaned:
         return f"Reddit request failed with status {status_code}."
 
+    lowered = cleaned.lower()
+    if "<!doctype html" in lowered or "<html" in lowered or "<title>ow! -- reddit.com</title>" in lowered:
+        if status_code == 403:
+            return (
+                "Reddit blocked this discovery request. Add REDDIT_CLIENT_ID, "
+                "REDDIT_CLIENT_SECRET, and REDDIT_USER_AGENT in backend/.env or your shell, then restart the backend."
+            )
+        return "Reddit returned an HTML block page instead of JSON. Try again in a moment."
+
     try:
         payload = json.loads(cleaned)
     except json.JSONDecodeError:
@@ -327,6 +452,31 @@ def _parse_reddit_error_detail(detail: str, status_code: int) -> str:
             return reason
 
     return cleaned
+
+
+def _parse_json_response_body(payload: str, *, source_mode: str) -> dict[str, Any]:
+    stripped = payload.strip()
+    lowered = stripped.lower()
+
+    if "<!doctype html" in lowered or "<html" in lowered or "<title>ow! -- reddit.com</title>" in lowered:
+        detail = "Reddit returned an HTML block page instead of JSON."
+        if source_mode == "public":
+            detail = (
+                "Reddit blocked the public discovery request. Add REDDIT_CLIENT_ID, "
+                "REDDIT_CLIENT_SECRET, and REDDIT_USER_AGENT in backend/.env or your shell, then restart the backend."
+            )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=detail,
+        )
+
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Reddit returned an unreadable response.",
+        ) from exc
 
 
 def _request_json_via_curl(
@@ -413,13 +563,7 @@ def _request_json_via_curl(
             detail=_parse_reddit_error_detail(body_snippet, http_status),
         )
 
-    try:
-        return _store_search_payload(url, source_mode, json.loads(payload))
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Reddit returned an unreadable response.",
-        ) from exc
+    return _store_search_payload(url, source_mode, _parse_json_response_body(payload, source_mode=source_mode))
 
 
 def _request_json(url: str, *, headers: dict[str, str], source_mode: str) -> dict[str, Any]:
@@ -434,7 +578,7 @@ def _request_json(url: str, *, headers: dict[str, str], source_mode: str) -> dic
         try:
             with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS, context=SSL_CONTEXT) as response:
                 payload = response.read().decode("utf-8")
-            return _store_search_payload(url, source_mode, json.loads(payload))
+            return _store_search_payload(url, source_mode, _parse_json_response_body(payload, source_mode=source_mode))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore").strip()
             last_error = exc
@@ -971,36 +1115,18 @@ async def _fetch_matching_posts(
     if not searched_subreddits:
         return []
 
-    search_plans = _build_search_query_plans(payload.tags)
     search_tasks: list[Any] = []
-
-    if payload.sort_mode in {"relevance", "top", "new"} and search_plans:
-        active_plans = search_plans[:2]
-        for subreddit in searched_subreddits:
-            for plan in active_plans:
-                search_tasks.append(
-                    _fetch_subreddit_search_posts(
-                        subreddit=subreddit,
-                        plan=plan,
-                        sort_mode=payload.sort_mode,
-                        time_filter=payload.time_filter,
-                        limit=query_limit,
-                        api_context=api_context,
-                        warnings=warnings,
-                    )
-                )
-    else:
-        for subreddit in searched_subreddits:
-            search_tasks.append(
-                _fetch_subreddit_listing_posts(
-                    subreddit=subreddit,
-                    sort_mode=payload.sort_mode,
-                    time_filter=payload.time_filter,
-                    limit=query_limit,
-                    api_context=api_context,
-                    warnings=warnings,
-                )
+    for subreddit in searched_subreddits:
+        search_tasks.append(
+            _fetch_subreddit_listing_posts(
+                subreddit=subreddit,
+                sort_mode="new",
+                time_filter="all",
+                limit=query_limit,
+                api_context=api_context,
+                warnings=warnings,
             )
+        )
 
     search_results = await _run_limited_searches(search_tasks)
     return [post for result in search_results for post in result]
@@ -1049,7 +1175,7 @@ def _extract_reddit_video(post: dict[str, Any]) -> dict[str, Any]:
 def _normalize_post(post: dict[str, Any], *, payload: RedditDiscoveryRequest) -> dict[str, Any] | None:
     if post.get("is_self"):
         return None
-    if not payload.allow_nsfw and bool(post.get("over_18")):
+    if bool(post.get("over_18")):
         return None
 
     external_id = str(post.get("id") or "").strip()
@@ -1092,15 +1218,6 @@ def _normalize_post(post: dict[str, Any], *, payload: RedditDiscoveryRequest) ->
         preview_kind = "video"
         media_type = "reddit_video"
         compilation_ready = True
-    else:
-        external_url = _normalize_url(post.get("url_overridden_by_dest") or post.get("url"))
-        external_media_type, external_preview_kind, external_compilation_ready = _external_media_type(external_url)
-        if payload.include_external_media and external_media_type != "link":
-            media_url = external_url
-            preview_url = thumbnail_url or external_url
-            preview_kind = external_preview_kind
-            media_type = external_media_type
-            compilation_ready = external_compilation_ready
 
     if not media_url:
         return None
@@ -1179,40 +1296,6 @@ def _score_clip_tag_relevance(clip: dict[str, Any], tag_profile: TagProfile) -> 
     return score
 
 
-def _resolve_ranking_weights(weights: RankingWeights | None) -> RankingWeights:
-    if weights is None:
-        return RankingWeights()
-    total = weights.relevance + weights.upvotes + weights.comments + weights.recency
-    if total <= 0:
-        return RankingWeights()
-    return RankingWeights(
-        relevance=weights.relevance / total,
-        upvotes=weights.upvotes / total,
-        comments=weights.comments / total,
-        recency=weights.recency / total,
-    )
-
-
-def _recency_window_seconds(time_filter: str) -> int:
-    if time_filter == "day":
-        return 24 * 3600
-    if time_filter == "week":
-        return 7 * 24 * 3600
-    if time_filter == "month":
-        return 30 * 24 * 3600
-    if time_filter == "year":
-        return 365 * 24 * 3600
-    return 730 * 24 * 3600
-
-
-def _recency_score(created_at: datetime | None, *, time_filter: str) -> float:
-    if created_at is None:
-        return 0.0
-    age_seconds = max(0.0, (_utc_now() - created_at).total_seconds())
-    window = float(_recency_window_seconds(time_filter))
-    return math.exp(-(age_seconds / max(window, 1.0)))
-
-
 def _title_signature(title: str) -> str:
     terms = [term for term in _tokenize_search_text(title) if term not in TAG_STOPWORDS]
     return " ".join(terms[:8])
@@ -1228,7 +1311,6 @@ def _rank_and_dedupe_posts(
     posts: list[dict[str, Any]],
     *,
     payload: RedditDiscoveryRequest,
-    tag_profile: TagProfile,
 ) -> tuple[list[dict[str, Any]], int]:
     normalized_clips: list[dict[str, Any]] = []
 
@@ -1236,36 +1318,28 @@ def _rank_and_dedupe_posts(
         clip = _normalize_post(post, payload=payload)
         if clip is None:
             continue
-        clip["relevance_raw"] = _score_clip_tag_relevance(clip, tag_profile)
-        if clip["relevance_raw"] <= 0:
-            continue
         normalized_clips.append(clip)
 
     if not normalized_clips:
         return [], len(posts)
 
-    max_relevance = max(clip["relevance_raw"] for clip in normalized_clips) or 1.0
-    max_upvotes = max(_to_int(clip["upvotes"]) for clip in normalized_clips) or 1
-    max_comments = max(_to_int(clip["comments"]) for clip in normalized_clips) or 1
-    weights = _resolve_ranking_weights(payload.ranking_weights)
-
     for clip in normalized_clips:
-        clip["relevance_score"] = clip["relevance_raw"] / max_relevance
-        clip["upvotes_score"] = _normalized_metric(_to_int(clip["upvotes"]), max_upvotes)
-        clip["comments_score"] = _normalized_metric(_to_int(clip["comments"]), max_comments)
-        clip["recency_score"] = _recency_score(clip.get("created_at"), time_filter=payload.time_filter)
-        clip["final_score"] = (
-            weights.relevance * clip["relevance_score"]
-            + weights.upvotes * clip["upvotes_score"]
-            + weights.comments * clip["comments_score"]
-            + weights.recency * clip["recency_score"]
+        duration_seconds = _to_int(clip.get("duration_seconds"))
+        clip["duration_sort_value"] = duration_seconds if duration_seconds > 0 else MAX_CLIP_DURATION_SECONDS + 1
+        clip["relevance_score"] = 0.0
+        clip["final_score"] = round(
+            (MAX_CLIP_DURATION_SECONDS + 1 - clip["duration_sort_value"]) / (MAX_CLIP_DURATION_SECONDS + 1),
+            6,
         )
 
     normalized_clips.sort(
         key=lambda item: (
-            -item["final_score"],
-            -item["comments"],
+            item.get("duration_sort_value", MAX_CLIP_DURATION_SECONDS + 1),
+            -(item.get("created_at").timestamp() if isinstance(item.get("created_at"), datetime) else 0.0),
             -item["upvotes"],
+            -item["engagement"],
+            -item["comments"],
+            -item["final_score"],
             item["title"].lower(),
         )
     )
@@ -1311,14 +1385,15 @@ def _clip_read(clip: dict[str, Any], *, rank_position: int) -> RedditClipRead:
     metadata = clip.get("metadata") or {}
     source_label = metadata.get("source_label") or (f"r/{clip['subreddit']}" if clip.get("subreddit") else "reddit")
     selection_reason = (
-        f"Ranked for strong tag relevance plus Reddit traction: {clip['upvotes']} upvotes, "
-        f"{clip['comments']} comments, score {clip['final_score']:.3f}."
+        f"Sorted by clip length: {clip['duration_seconds'] or 'n/a'}s, "
+        f"{clip['upvotes']} upvotes, {clip['engagement']} engagement."
     )
     return RedditClipRead(
         external_id=clip["external_id"],
         title=clip["title"],
         source=source_label,
         subreddit=clip["subreddit"],
+        topic_markers=_topic_markers_for_subreddit(clip["subreddit"]),
         source_url=clip["source_url"],
         permalink=clip["permalink"],
         video_url=clip["media_url"],
@@ -1426,34 +1501,23 @@ def get_reddit_clip_playback_response(external_id: str) -> FileResponse:
 
 
 async def discover_safe_reddit_clips(payload: RedditDiscoveryRequest) -> RedditDiscoveryResponse:
-    tag_profile = _build_tag_profile(payload.tags)
-    if not tag_profile.terms and not tag_profile.phrases:
+    resolved_topic_markers, topic_subreddits = _resolve_topic_marker_subreddits(payload.topic_markers)
+    if not resolved_topic_markers or not topic_subreddits:
         return RedditDiscoveryResponse(
             items=[],
             total_safe=0,
             total_results=0,
-            checked_count=0,
-            rejected_count=0,
-            cached_count=0,
             searched_subreddits=[],
             page=payload.page,
             page_size=payload.max_results,
             has_more=False,
             next_page=None,
-            sort_mode=payload.sort_mode,
-            time_filter=payload.time_filter,
             source_mode="public",
-            warnings=["No searchable tag terms were found in the request."],
+            warnings=["No configured subreddits were found for the selected topic markers."],
         )
 
     api_context, warnings = _build_api_context()
-
-    searched_subreddits = payload.subreddits or await _discover_related_subreddits(
-        tags=payload.tags,
-        allow_nsfw=payload.allow_nsfw,
-        api_context=api_context,
-        warnings=warnings,
-    )
+    searched_subreddits = topic_subreddits
 
     raw_posts = await _fetch_matching_posts(
         payload=payload,
@@ -1461,7 +1525,7 @@ async def discover_safe_reddit_clips(payload: RedditDiscoveryRequest) -> RedditD
         api_context=api_context,
         warnings=warnings,
     )
-    ranked_posts, deduped_out = _rank_and_dedupe_posts(raw_posts, payload=payload, tag_profile=tag_profile)
+    ranked_posts, deduped_out = _rank_and_dedupe_posts(raw_posts, payload=payload)
     available_posts, used_filtered = _filter_used_clips(ranked_posts)
 
     total_results = len(available_posts)
@@ -1479,24 +1543,19 @@ async def discover_safe_reddit_clips(payload: RedditDiscoveryRequest) -> RedditD
     ]
 
     if not searched_subreddits:
-        warnings.append("No relevant subreddits were discovered for the provided tags.")
+        warnings.append("No configured subreddits were found for the selected topic markers.")
     elif not items and total_results == 0:
-        warnings.append("No media-rich Reddit posts matched the provided tags and filters.")
+        warnings.append("No video posts matched the selected topic markers.")
 
     return RedditDiscoveryResponse(
         items=items,
         total_safe=len(items),
         total_results=total_results,
-        checked_count=len(raw_posts),
-        rejected_count=deduped_out + used_filtered,
-        cached_count=0,
         searched_subreddits=searched_subreddits,
         page=payload.page,
         page_size=payload.max_results,
         has_more=has_more,
         next_page=next_page,
-        sort_mode=payload.sort_mode,
-        time_filter=payload.time_filter,
         source_mode=api_context.source_mode,
         warnings=_unique_terms(warnings),
     )

@@ -1,44 +1,28 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import DiscoveryClipCard from "../components/DiscoveryClipCard";
 import EmptyState from "../components/EmptyState";
 import LoadingState from "../components/LoadingState";
-import { discoverRedditClips } from "../services/api";
+import { discoverRedditClips, listRedditTopicMarkers } from "../services/api";
+import { readUsedClipIds } from "../utils/usedClips";
 
 const initialFormState = {
-  tags: "funny, animal, fail",
-  subreddits: "",
+  topic_markers: [],
   max_results: 12,
-  sort_mode: "relevance",
-  time_filter: "week",
-  allow_nsfw: false,
-  include_external_media: false,
 };
 const STORAGE_KEY = "clipping-automation:selected-clips";
-
-function parseList(value) {
-  return value
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
 
 function emptyResults() {
   return {
     items: [],
     total_safe: 0,
     total_results: 0,
-    checked_count: 0,
-    rejected_count: 0,
-    cached_count: 0,
     searched_subreddits: [],
     page: 1,
     page_size: 0,
     has_more: false,
     next_page: null,
-    sort_mode: "relevance",
-    time_filter: "week",
     source_mode: "public",
     warnings: [],
   };
@@ -62,17 +46,85 @@ function RedditDiscoveryPage() {
   const [formState, setFormState] = useState(initialFormState);
   const [results, setResults] = useState(emptyResults);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [topicOptions, setTopicOptions] = useState([]);
+  const [topicLoadError, setTopicLoadError] = useState("");
+  const [usedClipIds, setUsedClipIds] = useState(() => readUsedClipIds());
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [activeQuery, setActiveQuery] = useState(null);
+  const [activeTopicFilter, setActiveTopicFilter] = useState("all");
+
+  const usedClipLookup = useMemo(() => new Set(usedClipIds), [usedClipIds]);
+  const selectedTopicOptions = useMemo(
+    () => topicOptions.filter((option) => formState.topic_markers.includes(option.key)),
+    [formState.topic_markers, topicOptions]
+  );
+  const discoveryItems = useMemo(
+    () => results.items.filter((clip) => !usedClipLookup.has(String(clip.external_id || "").toLowerCase())),
+    [results.items, usedClipLookup]
+  );
+  const filteredItems = useMemo(() => {
+    if (activeTopicFilter === "all") {
+      return discoveryItems;
+    }
+    return discoveryItems.filter((clip) => (clip.topic_markers || []).includes(activeTopicFilter));
+  }, [activeTopicFilter, discoveryItems]);
+  const resultTopicOptions = useMemo(() => {
+    const keys = new Set();
+    discoveryItems.forEach((clip) => {
+      (clip.topic_markers || []).forEach((marker) => keys.add(marker));
+    });
+    return topicOptions.filter((option) => keys.has(option.key));
+  }, [discoveryItems, topicOptions]);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadTopicOptions() {
+      try {
+        const data = await listRedditTopicMarkers();
+        if (ignore) {
+          return;
+        }
+        setTopicOptions(data.items || []);
+        setTopicLoadError("");
+      } catch (err) {
+        if (ignore) {
+          return;
+        }
+        setTopicOptions([]);
+        setTopicLoadError(err.response?.data?.detail || "Unable to load topic markers right now.");
+      }
+    }
+
+    loadTopicOptions();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    function syncUsedClips() {
+      setUsedClipIds(readUsedClipIds());
+    }
+
+    window.addEventListener("focus", syncUsedClips);
+    window.addEventListener("storage", syncUsedClips);
+
+    return () => {
+      window.removeEventListener("focus", syncUsedClips);
+      window.removeEventListener("storage", syncUsedClips);
+    };
+  }, []);
 
   const selectedClips = useMemo(
     () =>
       selectedIds
-        .map((externalId) => results.items.find((clip) => clip.external_id === externalId))
+        .map((externalId) => discoveryItems.find((clip) => clip.external_id === externalId))
         .filter(Boolean),
-    [results.items, selectedIds]
+    [discoveryItems, selectedIds]
   );
 
   const selectionOutput = useMemo(() => {
@@ -81,7 +133,8 @@ function RedditDiscoveryPage() {
     }
 
     return {
-      tags: parseList(formState.tags),
+      topic_markers: formState.topic_markers,
+      tags: selectedTopicOptions.map((topic) => topic.label),
       subreddits: results.searched_subreddits,
       selected_clips: selectedClips.map((clip, index) => ({
         external_id: clip.external_id,
@@ -93,27 +146,34 @@ function RedditDiscoveryPage() {
         duration_seconds: clip.duration_seconds,
       })),
     };
-  }, [formState.tags, results.searched_subreddits, selectedClips]);
+  }, [formState.topic_markers, results.searched_subreddits, selectedClips, selectedTopicOptions]);
 
   function buildRequest(page = 1) {
     return {
-      tags: parseList(formState.tags),
-      subreddits: parseList(formState.subreddits).length ? parseList(formState.subreddits) : null,
+      topic_markers: formState.topic_markers,
       max_results: Number(formState.max_results),
       page,
-      sort_mode: formState.sort_mode,
-      time_filter: formState.time_filter,
-      allow_nsfw: Boolean(formState.allow_nsfw),
-      include_external_media: Boolean(formState.include_external_media),
     };
   }
 
   function handleChange(event) {
-    const { name, value, type, checked } = event.target;
+    const { name, value } = event.target;
     setFormState((current) => ({
       ...current,
-      [name]: type === "checkbox" ? checked : name === "max_results" ? Number(value) : value,
+      [name]: name === "max_results" ? Number(value) : value,
     }));
+  }
+
+  function handleToggleTopic(markerKey) {
+    setFormState((current) => {
+      const exists = current.topic_markers.includes(markerKey);
+      return {
+        ...current,
+        topic_markers: exists
+          ? current.topic_markers.filter((value) => value !== markerKey)
+          : [...current.topic_markers, markerKey],
+      };
+    });
   }
 
   async function handleSubmit(event) {
@@ -122,6 +182,7 @@ function RedditDiscoveryPage() {
     setLoading(true);
     setError("");
     setSelectedIds([]);
+    setActiveTopicFilter("all");
 
     try {
       const data = await discoverRedditClips(requestPayload);
@@ -183,42 +244,65 @@ function RedditDiscoveryPage() {
     navigate("/compilation");
   }
 
+  const canSubmit = formState.topic_markers.length > 0;
+
   return (
     <div className="page-stack">
       <section className="feature-panel hero-panel">
         <div className="panel-heading">
           <div>
             <span className="eyebrow">Reddit Discovery</span>
-            <h3>Search tags, discover subreddits, then rank the best Reddit clips</h3>
+            <h3>Pick topic markers, then rank the best Reddit clips</h3>
             <p>
-              Enter one or more tags and the app will find related subreddits, fetch media-rich
-              posts, rank them using relevance, upvotes, comments, and recency, then let you load
-              more or pick five compilation-ready clips.
+              Select one or more topic markers and the app will fetch clips only from the
+              subreddits mapped in the JSON catalog. Results list video clips only and are sorted
+              by shortest length first before you lock five clips for compilation.
             </p>
           </div>
         </div>
 
         <form className="modal-form" onSubmit={handleSubmit}>
+          <div className="topic-marker-panel">
+            <div className="topic-marker-heading">
+              <strong>Topic markers</strong>
+              <span className="helper-text">
+                Select multiple markers to fetch clips only from those mapped subreddits.
+              </span>
+            </div>
+
+            {topicOptions.length ? (
+              <div className="topic-marker-grid" role="group" aria-label="Topic markers">
+                {topicOptions.map((option) => {
+                  const isActive = formState.topic_markers.includes(option.key);
+                  return (
+                    <button
+                      key={option.key}
+                      className={`topic-marker-chip${isActive ? " active" : ""}`}
+                      type="button"
+                      onClick={() => handleToggleTopic(option.key)}
+                      aria-pressed={isActive}
+                    >
+                      <span>{option.label}</span>
+                      <small>{option.subreddits.length} subreddits</small>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="helper-text">{topicLoadError || "No topic markers configured yet."}</p>
+            )}
+
+            {selectedTopicOptions.length ? (
+              <p className="helper-text">
+                Searching only in:{" "}
+                {selectedTopicOptions
+                  .flatMap((option) => option.subreddits.map((subreddit) => `r/${subreddit}`))
+                  .join(", ")}
+              </p>
+            ) : null}
+          </div>
+
           <div className="form-grid">
-            <label>
-              Search tags
-              <input
-                name="tags"
-                value={formState.tags}
-                onChange={handleChange}
-                placeholder="funny, cat, wholesome"
-                required
-              />
-            </label>
-            <label>
-              Subreddits (optional)
-              <input
-                name="subreddits"
-                value={formState.subreddits}
-                onChange={handleChange}
-                placeholder="Leave blank to auto-discover from tags"
-              />
-            </label>
             <label>
               Page size
               <input
@@ -230,52 +314,11 @@ function RedditDiscoveryPage() {
                 onChange={handleChange}
               />
             </label>
-            <label>
-              Sort mode
-              <select name="sort_mode" value={formState.sort_mode} onChange={handleChange}>
-                <option value="relevance">Relevance</option>
-                <option value="top">Top</option>
-                <option value="hot">Hot</option>
-                <option value="new">New</option>
-                <option value="rising">Rising</option>
-              </select>
-            </label>
-            <label>
-              Time filter
-              <select name="time_filter" value={formState.time_filter} onChange={handleChange}>
-                <option value="day">Day</option>
-                <option value="week">Week</option>
-                <option value="month">Month</option>
-                <option value="year">Year</option>
-                <option value="all">All time</option>
-              </select>
-            </label>
           </div>
 
           <div className="action-row">
-            <label className="checkbox-row">
-              <input
-                name="allow_nsfw"
-                type="checkbox"
-                checked={formState.allow_nsfw}
-                onChange={handleChange}
-              />
-              Include NSFW results
-            </label>
-            <label className="checkbox-row">
-              <input
-                name="include_external_media"
-                type="checkbox"
-                checked={formState.include_external_media}
-                onChange={handleChange}
-              />
-              Include external media links
-            </label>
-          </div>
-
-          <div className="action-row">
-            <button className="primary-button" type="submit" disabled={loading}>
-              {loading ? "Searching..." : "Discover clips"}
+            <button className="primary-button" type="submit" disabled={loading || !canSubmit}>
+              {loading ? "Searching..." : canSubmit ? "Discover clips" : "Select at least one topic"}
             </button>
           </div>
         </form>
@@ -284,7 +327,7 @@ function RedditDiscoveryPage() {
       {error ? <EmptyState title="Discovery blocked" message={error} /> : null}
 
       {loading ? (
-        <LoadingState message="Discovering subreddits, fetching media posts, and ranking results..." />
+        <LoadingState message="Fetching posts from the selected topic subreddits and ranking results..." />
       ) : (
         <>
           <section className="feature-panel">
@@ -293,8 +336,7 @@ function RedditDiscoveryPage() {
                 <span className="eyebrow">Selection</span>
                 <h3>Choose exactly 5 compilation-ready clips</h3>
                 <p>
-                  Only compilation-ready clips can be selected. External media entries can still be
-                  reviewed from the results list when enabled.
+                  Only video clips from the selected topic subreddits are shown here.
                 </p>
                 {results.searched_subreddits?.length ? (
                   <p className="helper-text">
@@ -338,55 +380,90 @@ function RedditDiscoveryPage() {
             )}
           </section>
 
-          {results.items.length === 0 ? (
-            <EmptyState
-              title="No clips found"
-              message="Try broader tags, a different sort mode, or different subreddits."
-            />
-          ) : (
+          {activeQuery ? (
             <>
               <section className="panel-inline-summary">
                 <div>
                   <span className="eyebrow">Discovery results</span>
                   <strong>
-                    Loaded {results.items.length} of {results.total_results} ranked clips
+                    Loaded {filteredItems.length} of {results.total_results} ranked clips
                   </strong>
-                  <p className="helper-text">
-                    Source mode: {results.source_mode} · sort: {results.sort_mode} · time: {results.time_filter}
-                  </p>
-                </div>
-                <div className="pill-row">
-                  <span className="status-pill">{results.checked_count} checked</span>
-                  <span className="status-pill danger">{results.rejected_count} filtered</span>
+                  <p className="helper-text">Sorted by clip length from shortest to longest.</p>
                 </div>
               </section>
 
-              <section className="results-grid" aria-live="polite">
-                {results.items.map((clip) => {
-                  const selectedRank = selectedIds.indexOf(clip.external_id) + 1;
-                  return (
-                    <DiscoveryClipCard
-                      key={clip.external_id}
-                      clip={clip}
-                      selectedRank={selectedRank || null}
-                      disableSelect={selectedIds.length >= 5 && !selectedRank}
-                      onToggle={handleToggleClip}
-                    />
-                  );
-                })}
-              </section>
-
-              {results.has_more ? (
+              {resultTopicOptions.length ? (
                 <section className="feature-panel">
-                  <div className="action-row">
-                    <button className="ghost-button" type="button" onClick={handleLoadMore} disabled={loadingMore}>
-                      {loadingMore ? "Loading..." : "Load more"}
+                  <div className="panel-heading">
+                    <div>
+                      <span className="eyebrow">View Filter</span>
+                      <h3>Browse clips by topic</h3>
+                      <p className="helper-text">
+                        Narrow the current results to one selected topic without changing the fetch.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="topic-filter-row" role="group" aria-label="Result topic filter">
+                    <button
+                      type="button"
+                      className={`topic-filter-chip${activeTopicFilter === "all" ? " active" : ""}`}
+                      onClick={() => setActiveTopicFilter("all")}
+                    >
+                      All topics
                     </button>
+                    {resultTopicOptions.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={`topic-filter-chip${activeTopicFilter === option.key ? " active" : ""}`}
+                        onClick={() => setActiveTopicFilter(option.key)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
                   </div>
                 </section>
               ) : null}
+
+              {filteredItems.length === 0 ? (
+                <EmptyState
+                  title="No clips found"
+                  message={
+                    activeTopicFilter === "all"
+                      ? "Try another topic marker mix or increase the page size."
+                      : "No clips matched this topic filter yet. Switch back to all topics or load more."
+                  }
+                />
+              ) : (
+                <>
+                  <section className="results-grid" aria-live="polite">
+                    {filteredItems.map((clip) => {
+                      const selectedRank = selectedIds.indexOf(clip.external_id) + 1;
+                      return (
+                        <DiscoveryClipCard
+                          key={clip.external_id}
+                          clip={clip}
+                          selectedRank={selectedRank || null}
+                          disableSelect={selectedIds.length >= 5 && !selectedRank}
+                          onToggle={handleToggleClip}
+                        />
+                      );
+                    })}
+                  </section>
+
+                  {results.has_more ? (
+                    <section className="feature-panel">
+                      <div className="action-row">
+                        <button className="ghost-button" type="button" onClick={handleLoadMore} disabled={loadingMore}>
+                          {loadingMore ? "Loading..." : "Load more"}
+                        </button>
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              )}
             </>
-          )}
+          ) : null}
         </>
       )}
     </div>

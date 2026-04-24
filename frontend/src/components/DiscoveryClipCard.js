@@ -22,6 +22,9 @@ function formatCreatedAt(value) {
 function DiscoveryClipCard({ clip, selectedRank, disableSelect, onToggle }) {
   const isSelected = Boolean(selectedRank);
   const canSelect = clip.compilation_ready && !disableSelect;
+  const topicLabel = clip.topic_markers?.length
+    ? clip.topic_markers.map((marker) => marker.replace(/_/g, " ")).join(" / ")
+    : null;
 
   return (
     <article className={`discovery-card${isSelected ? " selected" : ""}`}>
@@ -31,7 +34,8 @@ function DiscoveryClipCard({ clip, selectedRank, disableSelect, onToggle }) {
             className="clip-preview"
             controls
             playsInline
-            preload="metadata"
+            preload="none"
+            muted
             poster={clip.thumbnail_url || undefined}
             src={clip.preview_url}
           />
@@ -44,6 +48,7 @@ function DiscoveryClipCard({ clip, selectedRank, disableSelect, onToggle }) {
         <div>
           <span className="eyebrow">{clip.source}</span>
           <h3>{clip.title}</h3>
+          {topicLabel ? <p className="helper-text">Topic: {topicLabel}</p> : null}
         </div>
         <div className="pill-row">
           {selectedRank ? <StatusPill tone="success">#{selectedRank}</StatusPill> : null}
@@ -70,7 +75,7 @@ function DiscoveryClipCard({ clip, selectedRank, disableSelect, onToggle }) {
           <span>{formatCount(clip.engagement)}</span>
         </div>
         <div>
-          <span className="meta-label">Rank score</span>
+          <span className="meta-label">Traction score</span>
           <span>{clip.final_score.toFixed(3)}</span>
         </div>
         <div>
