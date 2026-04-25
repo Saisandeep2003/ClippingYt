@@ -2,7 +2,7 @@ FROM node:20-bookworm-slim AS frontend-build
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps --no-audit --no-fund
 COPY frontend/ ./
 ENV CI=true
 RUN npm run build
