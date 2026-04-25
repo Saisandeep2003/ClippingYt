@@ -9,3 +9,19 @@ services:
     envVars:
       - key: REDDIT_USER_AGENT
         value: "ClippingAutomation/2.0 (deployed reddit clip discovery)"
+      - key: RENDER_TARGET_WIDTH
+        value: "720"
+      - key: RENDER_TARGET_HEIGHT
+        value: "1280"
+      - key: RENDER_TARGET_FPS
+        value: "24"
+      - key: RENDER_MAX_CLIP_DURATION
+        value: "18"
+      - key: FFMPEG_THREADS
+        value: "1"
+      - key: FFMPEG_VIDEO_PRESET
+        value: "ultrafast"
+      - key: FFMPEG_VIDEO_CRF
+        value: "32"
+      - key: FFMPEG_AUDIO_BITRATE
+        value: "96k"

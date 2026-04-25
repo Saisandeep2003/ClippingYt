@@ -14,10 +14,21 @@ from config import COMPILED_ASSETS_DIR, DEFAULT_OUTRO_PATH
 from schemas import CompilationRenderRequest, CompilationRenderResponse
 
 
-TARGET_WIDTH = 1080
-TARGET_HEIGHT = 1920
-TARGET_FPS = 30
-MAX_CLIP_DURATION = 24
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+TARGET_WIDTH = _env_int("RENDER_TARGET_WIDTH", 1080)
+TARGET_HEIGHT = _env_int("RENDER_TARGET_HEIGHT", 1920)
+TARGET_FPS = _env_int("RENDER_TARGET_FPS", 30)
+MAX_CLIP_DURATION = _env_int("RENDER_MAX_CLIP_DURATION", 24)
+FFMPEG_THREADS = _env_int("FFMPEG_THREADS", 1)
+VIDEO_PRESET = os.getenv("FFMPEG_VIDEO_PRESET", "veryfast")
+VIDEO_CRF = _env_int("FFMPEG_VIDEO_CRF", 28, minimum=0)
+AUDIO_BITRATE = os.getenv("FFMPEG_AUDIO_BITRATE", "128k")
 FONT_PATH = Path(os.getenv("FFMPEG_FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
 OUTRO_PATH = DEFAULT_OUTRO_PATH
 TITLE_WRAP_WIDTH = 24
@@ -52,6 +63,46 @@ def _run_command(command: list[str], error_message: str) -> None:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=stderr or error_message,
         ) from exc
+
+
+def _ffmpeg_base_command() -> list[str]:
+    return [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-threads",
+        str(FFMPEG_THREADS),
+        "-filter_threads",
+        str(FFMPEG_THREADS),
+        "-filter_complex_threads",
+        str(FFMPEG_THREADS),
+    ]
+
+
+def _video_encode_options() -> list[str]:
+    return [
+        "-c:v",
+        "libx264",
+        "-preset",
+        VIDEO_PRESET,
+        "-crf",
+        str(VIDEO_CRF),
+        "-threads",
+        str(FFMPEG_THREADS),
+        "-pix_fmt",
+        "yuv420p",
+    ]
+
+
+def _audio_encode_options() -> list[str]:
+    return [
+        "-c:a",
+        "aac",
+        "-ar",
+        "44100",
+        "-b:a",
+        AUDIO_BITRATE,
+    ]
 
 
 def _clip_duration(clip_duration: int | None) -> int:
@@ -192,8 +243,7 @@ def render_compilation(payload: CompilationRenderRequest) -> CompilationRenderRe
             processed_paths.append(processed_path)
 
             command = [
-                "ffmpeg",
-                "-y",
+                *_ffmpeg_base_command(),
                 "-i",
                 clip.url,
                 "-t",
@@ -204,20 +254,10 @@ def render_compilation(payload: CompilationRenderRequest) -> CompilationRenderRe
                 "[vout]",
                 "-map",
                 "0:a:0",
-                "-c:v",
-                "libx264",
-                "-preset",
-                "veryfast",
-                "-pix_fmt",
-                "yuv420p",
+                *_video_encode_options(),
                 "-movflags",
                 "+faststart",
-                "-c:a",
-                "aac",
-                "-ar",
-                "48000",
-                "-b:a",
-                "192k",
+                *_audio_encode_options(),
                 str(processed_path),
             ]
             _run_command(command, f"Timed out while rendering clip {clip.rank}.")
@@ -228,8 +268,7 @@ def render_compilation(payload: CompilationRenderRequest) -> CompilationRenderRe
         processed_paths.append(outro_path)
 
         outro_command = [
-            "ffmpeg",
-            "-y",
+            *_ffmpeg_base_command(),
             "-i",
             str(OUTRO_PATH),
             "-filter_complex",
@@ -238,20 +277,10 @@ def render_compilation(payload: CompilationRenderRequest) -> CompilationRenderRe
             "[vout]",
             "-map",
             "0:a:0",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-pix_fmt",
-            "yuv420p",
+            *_video_encode_options(),
             "-movflags",
             "+faststart",
-            "-c:a",
-            "aac",
-            "-ar",
-            "48000",
-            "-b:a",
-            "192k",
+            *_audio_encode_options(),
             str(outro_path),
         ]
         _run_command(outro_command, "Timed out while rendering the outro clip.")
@@ -263,26 +292,15 @@ def render_compilation(payload: CompilationRenderRequest) -> CompilationRenderRe
         )
 
         concat_command = [
-            "ffmpeg",
-            "-y",
+            *_ffmpeg_base_command(),
             "-f",
             "concat",
             "-safe",
             "0",
             "-i",
             str(concat_file),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-ar",
-            "48000",
-            "-b:a",
-            "192k",
+            *_video_encode_options(),
+            *_audio_encode_options(),
             "-movflags",
             "+faststart",
             str(output_path),
