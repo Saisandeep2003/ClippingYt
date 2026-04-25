@@ -1,9 +1,11 @@
 services:
   - type: web
-    name: clippingyt
+    name: clippingyt-deploy
     runtime: docker
     plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     healthCheckPath: /api/health
     envVars:
       - key: REDDIT_USER_AGENT
-        value: ClippingAutomation/2.0 (deployed reddit clip discovery)
+        value: "ClippingAutomation/2.0 (deployed reddit clip discovery)"
