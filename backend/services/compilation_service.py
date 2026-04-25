@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import tempfile
@@ -17,7 +18,7 @@ TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1920
 TARGET_FPS = 30
 MAX_CLIP_DURATION = 24
-FONT_PATH = Path("/System/Library/Fonts/Supplemental/Arial Bold.ttf")
+FONT_PATH = Path(os.getenv("FFMPEG_FONT_PATH", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"))
 OUTRO_PATH = DEFAULT_OUTRO_PATH
 TITLE_WRAP_WIDTH = 24
 TITLE_MAX_LINES = 2
@@ -108,6 +109,13 @@ def _escape_drawtext_text(value: str) -> str:
     return escaped
 
 
+def _drawtext_font_option() -> str:
+    if not FONT_PATH.exists():
+        return ""
+    font = str(FONT_PATH).replace("\\", "\\\\").replace(":", r"\:")
+    return f"fontfile='{font}':"
+
+
 def _layout_title(value: str) -> str:
     cleaned = re.sub(r"\s+", " ", value).strip()
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
@@ -125,7 +133,7 @@ def _layout_title(value: str) -> str:
 
 
 def _filter_for_clip(rank: int, title_file: Path, clip_duration: int) -> str:
-    font = str(FONT_PATH).replace("\\", "\\\\").replace(":", r"\:")
+    font_option = _drawtext_font_option()
     title_path = str(title_file).replace("\\", "\\\\").replace(":", r"\:")
     rank_label = _escape_drawtext_text(f"#{rank}")
 
@@ -135,10 +143,10 @@ def _filter_for_clip(rank: int, title_file: Path, clip_duration: int) -> str:
         f"drawbox=x=0:y=0:w={TARGET_WIDTH}:h=240:color=black@0.24:t=fill,"
         f"drawbox=x=36:y=70:w=120:h=78:color=black@0.38:t=fill,"
         f"drawbox=x=36:y=70:w=120:h=78:color=white@0.18:t=3,"
-        f"drawtext=fontfile='{font}':text='{rank_label}':x=(96-text_w/2):y=89:"
+        f"drawtext={font_option}text='{rank_label}':x=(96-text_w/2):y=89:"
         f"fontsize=46:fontcolor=white:borderw=2:bordercolor=black@0.55:"
         f"shadowx=2:shadowy=2:shadowcolor=black@0.45,"
-        f"drawtext=fontfile='{font}':textfile='{title_path}':reload=0:x=(w-text_w)/2:y=112:"
+        f"drawtext={font_option}textfile='{title_path}':reload=0:x=(w-text_w)/2:y=112:"
         f"fontsize=54:line_spacing=12:fontcolor=white:borderw=2:bordercolor=black@0.55:"
         f"shadowx=2:shadowy=2:shadowcolor=black@0.40,"
         f"setsar=1,format=yuv420p[vout]"

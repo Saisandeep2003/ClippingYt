@@ -113,7 +113,8 @@ Main screens:
 
 Frontend API integration is defined in `frontend/src/services/api.js` and points to:
 
-- `http://127.0.0.1:8000/api` by default
+- `http://127.0.0.1:8000/api` by default during local frontend development
+- `/api` by default when the built frontend is served from the deployed backend
 - `REACT_APP_API_URL` when explicitly set
 
 ### Frontend Setup
@@ -133,6 +134,38 @@ To point the UI at a different backend:
 ```bash
 REACT_APP_API_URL=http://127.0.0.1:8000/api npm start
 ```
+
+## Deploying Online
+
+The simplest hosted setup for this repository is a single Docker web service. The included
+`Dockerfile` builds the React frontend, installs the FastAPI backend with FFmpeg, and serves both
+from one public URL. The included `render.yaml` is ready for Render Blueprints.
+
+### Render Free Deployment
+
+1. Push this repository to GitHub.
+2. Open Render and create a new Blueprint from the repository.
+3. Keep the service plan as `free`.
+4. Add these optional environment variables if you have Reddit API credentials:
+
+```text
+REDDIT_CLIENT_ID=...
+REDDIT_CLIENT_SECRET=...
+REDDIT_USER_AGENT=ClippingAutomation/2.0 by your-reddit-username
+```
+
+After deploy, the app is available at the Render `onrender.com` URL. The frontend and backend share
+the same origin, so the React app automatically talks to `/api`.
+
+Render free services are useful for phone access and demos, but they are not ideal long-term storage:
+
+- Free services spin down after inactivity, so the first request after a quiet period can be slow.
+- The local filesystem is ephemeral on free services, so cached Reddit clips, rendered videos, and
+  used-clip JSON can disappear after restarts or redeploys.
+- Long FFmpeg renders can be limited by free-service CPU, memory, timeout, or bandwidth constraints.
+
+For a more reliable production setup, move render state to persistent storage and run rendering as a
+background job or worker.
 
 ## Rendering Notes
 

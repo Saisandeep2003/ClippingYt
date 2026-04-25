@@ -10,6 +10,7 @@ dist/
 frontend/node_modules/
 frontend/build/
 frontend/.cache/
+.npm-cache/
 /key
 /key.pub
 
@@ -26,3 +27,4 @@ data/exports/*.plan.json
 data/exports/*_build/
 data/assets/approved/
 data/assets/compiled/
+data/test-temp/

@@ -1,7 +1,14 @@
 import axios from "axios";
 
+const localApiUrl = "http://127.0.0.1:8000/api";
+const sameOriginApiUrl = "/api";
+const isLocalBrowser =
+  typeof window !== "undefined" &&
+  ["localhost", "127.0.0.1"].includes(window.location.hostname);
+const defaultApiUrl = isLocalBrowser ? localApiUrl : sameOriginApiUrl;
+
 const apiClient = axios.create({
-  baseURL: process.env.REACT_APP_API_URL || "http://127.0.0.1:8000/api",
+  baseURL: process.env.REACT_APP_API_URL || defaultApiUrl,
   headers: {
     "Content-Type": "application/json",
   },
